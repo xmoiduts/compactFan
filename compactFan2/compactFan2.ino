@@ -1,6 +1,3 @@
-﻿//to do :
-//减小开机电流冲击
-/*全局变量*/
 bool direction = 1 ; //风扇速度变更的方向，0 : will go down; 1 : will go up .
 
 ///按钮状态：未按下、点击、长按
@@ -124,12 +121,12 @@ public:
 };
 
 ///---------------------------------------------------------///
-/*类的声明*/
+/*全局变量区*/
 Button button1(14) ;
 Int1ms timer0 ;
-Fan fan1(11,10000) ;
+Fan fan1(11,5000) ;
 
-/*主程序*/
+/*初始化代码？*/
 
 SIGNAL ( TIMER0_COMPA_vect ) {
     timer0 . begin () ;
@@ -175,6 +172,8 @@ void setup() {
 
 void loop() {
     delay(125) ;
-    //Serial.println ( timer0.getDuration () ) ;
-    Serial.println ( OCR2B ) ;
+    Serial.println ( timer0.getDuration () ) ;
+    Serial.println ( OCR2A ) ;
 }
+
+
