@@ -1,5 +1,6 @@
 ﻿//to do :
-//减小开机电流冲击
+//加减速指示灯
+//看门狗节能
 /*全局变量*/
 bool direction = 1 ; //风扇速度变更的方向，0 : will go down; 1 : will go up .
 
@@ -7,7 +8,7 @@ bool direction = 1 ; //风扇速度变更的方向，0 : will go down; 1 : will 
 class Button{
 public:
     unsigned short role , repeated ; //本轮是否读取按钮，按钮连续按下周期数。按钮是否被按下过（去抖动），。
-    unsigned short stat ; //按钮是否被点击（去抖动），0 : not clicked ; 1 : clicked ; 2 : pressed ;
+    unsigned short stat ; //按钮是否被点击（去抖动），0 : not clicked ; 1 : clicked ; 2 : released from click ;3: released from press  ;
     int pin ;   //按钮分配的读取引脚
     Button( int ipin ) {
         pin = ipin ;
@@ -30,14 +31,31 @@ public:
                 stat = 1 ;
             } //clicked
             else if ( repeated > 19 ) {
-                stat = 2 ;
+                stat = 3 ;
             }
-        }//clicked or pressed
-        else if ( stat ){
+        }//clicked or pressed in this loop
+        else
+        if ( stat == 1 ){
+            stat = 2 ;
+            repeated = 0 ;
+
+        }//released from click ;
+        else
+        if ( stat == 2 ) {
             stat = 0 ;
             repeated = 0 ;
+        }//clear stat 2
+        else
+        if ( stat == 3 ) {
+            stat = 4 ;
+            repeated = 0 ;
+        }//released from press ;
+        else
+        if ( stat == 4 ) {
+            stat = 0 ;
             direction = !direction ; /// 作用于风扇的方向，取反。
-        }//released ;
+        }//clear stat 4 ;
+
     }//检测按钮状态
     int getStat () {
         return stat ;
@@ -47,40 +65,38 @@ public:
 
 class Fan {
 private :
-    unsigned short dutyCycle ; //为寄存器赋值的占空比
-    float realduty , k ;//用来计算的占空比,变速斜率
-    unsigned long  prevMil , curMil , interval ; //
-    unsigned short atBottom , atTop ; //风扇功率是否达到最低/最高
-    int pin , PRT ; //风扇的控速脚,功率响应时间
+    unsigned short dutyCycle , minDuty , isUp;      //为寄存器赋值的占空比，最低占空比，是否正在运行
+    float realduty , k ;                            //用来计算的占空比,变速斜率
+    unsigned long  prevMil , curMil , interval ;    //统计调用间隔
+    //unsigned short atBottom , atTop ;             //风扇功率是否达到最低/最高
+    int pin , cont , PRT ;                          //风扇的控速脚,风扇的开关脚，功率响应时间
 public :
-    Fan(unsigned short ipin , int PowerResponseTime ){//风扇控速脚、最低占空比、速度从最低到最高的响应时间(ms)
-        pin = ipin ;
+    Fan ( int pwmPin , int controlPin , unsigned short miniDuty , int PowerResponseTime )
+    {//风扇控速脚、最低占空比、速度从最低到最高的响应时间(ms)
+        pin = pwmPin ;
+        cont = controlPin ;         //引脚
+        digitalWrite ( cont , LOW ) ;
 
         dutyCycle = 0 ;
         realduty  = 0 ;
+        minDuty = miniDuty ;        //占空比
 
         PRT = PowerResponseTime ;
         k = 255.0/PRT ;
+        interval = 0 ;              //计算变速的速度
 
-        interval = 0 ;
-
-        atBottom = 0 ;
-        atTop = 0 ;
+        isUp = 0 ;                  //风扇开关
     }
     void update ( ) {
+
         prevMil = curMil ;
-        curMil = millis();//刷新两次调用之间的间隔
+        curMil = millis();
         interval = curMil - prevMil ;
 
-        if (realduty == 255) {
-            atTop = 1 ;
-        }
-        if (realduty == 0 ) {
-            atBottom = 0 ;
-        }
-    }//斜率：
+    }//刷新两次调用之间的间隔
     void up ( ) {
-        atBottom = 0 ;
+
+        if ( isUp == 0 ) { return ; }
         realduty += k * interval ;
         if ( realduty >= 255 ) {
             realduty = 255 ;
@@ -89,13 +105,36 @@ public :
         OCR2A = dutyCycle ;
     }
     void down ( ) {
-        atTop = 0 ;
+        if ( isUp == 0 ) { return ; }
         realduty -= k * interval ;
-        if ( realduty < 0 ) {
-            realduty = 0 ;
+        if ( realduty < minDuty ) {
+            realduty = minDuty ;
         }
         dutyCycle = (unsigned short)realduty ;
         OCR2A = dutyCycle ;
+    }
+    void shutdown ( ) {
+
+        isUp = 0 ;
+        digitalWrite ( cont , LOW ) ;
+        dutyCycle = 0 ;
+        realduty = 0 ;
+        OCR2A = dutyCycle ;
+
+    }
+    void startup  ( ) {
+
+        isUp = 1 ;
+        direction = 1;
+        digitalWrite ( cont , HIGH ) ;
+        dutyCycle = minDuty ;
+        realduty = minDuty ;
+        OCR2A = dutyCycle ;
+
+    }
+
+    unsigned short getStat ( ) {
+        return isUp ;
     }
 };
 
@@ -127,31 +166,38 @@ public:
 /*类的声明*/
 Button button1(14) ;
 Int1ms timer0 ;
-Fan fan1(11,10000) ;
+Fan fan1(11 , 10 , 112 , 15000 ) ;
 
 /*主程序*/
 
-SIGNAL ( TIMER0_COMPA_vect ) {
-    timer0 . begin () ;
+void everyms () {
 
-    button1. update() ;
+    button1. update() ;                     //更新按钮状态
 
-    if ( button1.getStat() == 2 ) {
-        if ( direction == 0 ) {
-            fan1.down() ;
-        }//减速
-        else {
-            fan1.up() ;
-        }//加速
-    }//长按
-    else if (button1.getStat() == 1) {
-        //关机
-    }//单击
+    if ( button1.getStat() == 3 ) {
+        if ( direction == 0 )
+            fan1.down() ;           //减速
+        else
+            fan1.up() ;             //加速
+    }                                       //长按
+
+    else if (button1.getStat() == 2 ) {
+        if ( fan1.getStat() == 1 )
+            fan1.shutdown();        //关机
+        else
+            fan1.startup ();        //开机
+    }                                       //单击
+
     else {
-    }//没按键
+    }                                       //没按键
     fan1.update() ;
 
-    timer0 . end () ;
+}
+
+SIGNAL ( TIMER0_COMPA_vect ) {
+    timer0 . begin ( ) ;
+    everyms ( ) ;
+    timer0 . end   ( ) ;
 }//this signal is called every 1.024 ms , all control logics are written here .
 
 void setup() {
@@ -168,13 +214,14 @@ void setup() {
     */
     TCCR2A = 0x91 ;
     TCCR2B = 0x01 ;
+    pinMode (10,OUTPUT) ;
     pinMode (11,OUTPUT) ;
     OCR2A = 0 ;
 
 }
 
 void loop() {
-    delay(125) ;
+    delay(64) ;
     //Serial.println ( timer0.getDuration () ) ;
-    Serial.println ( OCR2B ) ;
+    Serial.println ( OCR2A ) ;
 }
