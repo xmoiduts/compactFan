@@ -1,10 +1,21 @@
 ﻿//to do :
-//加减速指示灯
 //看门狗节能
+
+/*引脚说明：*/
+/*
+9 - 按钮的vcc
+11 - pwm
+13 - 风扇变速led
+a1 - 风扇开关
+a3 - 按钮感知
+*/
 /*全局变量*/
 bool direction = 1 ; //风扇速度变更的方向，0 : will go down; 1 : will go up .
 
-///按钮状态：未按下、点击、长按
+/**按钮类说明：按钮经消抖后分为0，1，2，3，4 共5个状态，分别对应：
+未按下、短按、（从单击）弹起、长按下、（从长按）弹起。
+消抖方式是：连续四次读取输入引脚，均判定为高电平，此时修改状态为“1”
+**/
 class Button{
 public:
     unsigned short role , repeated ; //本轮是否读取按钮，按钮连续按下周期数。按钮是否被按下过（去抖动），。
@@ -16,6 +27,7 @@ public:
         role = 0 ;
         stat = 0 ;
         repeated = 0 ;
+        digitalWrite ( 9, HIGH ) ; //开启按钮的输入电压
     }
     void update () {
         role ++ ;
@@ -94,24 +106,31 @@ public :
         interval = curMil - prevMil ;
 
     }//刷新两次调用之间的间隔
-    void up ( ) {
+    short up ( ) {
 
-        if ( isUp == 0 ) { return ; }
+        if ( isUp == 0 ) { return 0 ; }
         realduty += k * interval ;
-        if ( realduty >= 255 ) {
+        if ( realduty >= 255 ) {         //不设为256，风扇最大值会限制在奇怪的254.
             realduty = 255 ;
+            OCR2A = realduty ;
+            return 0 ;
+        }else{
+            dutyCycle = (unsigned short)realduty ;
+            OCR2A = dutyCycle ;
+            return 1 ;
         }
-        dutyCycle = (unsigned short)realduty ;
-        OCR2A = dutyCycle ;
+
     }
-    void down ( ) {
-        if ( isUp == 0 ) { return ; }
+    short down ( ) {
+        if ( isUp == 0 ) { return 0 ; }
         realduty -= k * interval ;
         if ( realduty < minDuty ) {
             realduty = minDuty ;
+            return 0 ;
         }
         dutyCycle = (unsigned short)realduty ;
         OCR2A = dutyCycle ;
+        return 1 ;
     }
     void shutdown ( ) {
 
@@ -136,6 +155,32 @@ public :
     unsigned short getStat ( ) {
         return isUp ;
     }
+};
+
+class Flasher {
+public:
+    int pin ; //闪光灯链连接的引脚
+    short stat ; //现在是否点亮
+    Flasher ( int ipin ) {
+        pin = ipin ;
+        pinMode ( pin , OUTPUT ) ;
+        digitalWrite ( pin , LOW ) ;
+        stat = 0 ;
+    }
+    void write ( int result ) {
+        if ( result ) {
+            digitalWrite ( pin , HIGH ) ;
+            stat = 1 ;
+        }
+        else {
+            digitalWrite ( pin , LOW ) ;
+            stat = 0 ;
+        }
+    }
+};
+
+class EnergySaver {
+
 };
 
 class Int1ms {
@@ -164,9 +209,10 @@ public:
 
 ///---------------------------------------------------------///
 /*类的声明*/
-Button button1(14) ;
+Button button1(A3) ;
 Int1ms timer0 ;
-Fan fan1(11 , 10 , 112 , 15000 ) ;
+Fan fan1(11 , A1 , 112 , 15000 ) ;
+Flasher L13 (13) ;
 
 /*主程序*/
 
@@ -176,9 +222,9 @@ void everyms () {
 
     if ( button1.getStat() == 3 ) {
         if ( direction == 0 )
-            fan1.down() ;           //减速
+            L13.write ( fan1.down() ) ;           //减速
         else
-            fan1.up() ;             //加速
+            L13.write ( fan1.up  () ) ;             //加速
     }                                       //长按
 
     else if (button1.getStat() == 2 ) {
@@ -189,6 +235,7 @@ void everyms () {
     }                                       //单击
 
     else {
+            L13.write ( 0 ) ;
     }                                       //没按键
     fan1.update() ;
 
@@ -214,6 +261,7 @@ void setup() {
     */
     TCCR2A = 0x91 ;
     TCCR2B = 0x01 ;
+    pinMode (9,OUTPUT) ;
     pinMode (10,OUTPUT) ;
     pinMode (11,OUTPUT) ;
     OCR2A = 0 ;
