@@ -10,6 +10,9 @@ a1 - 风扇开关
 a3 - 按钮感知
 */
 /*全局变量*/
+#include <avr/wdt.h>
+#include <avr/sleep.h>
+
 bool direction = 1 ; //风扇速度变更的方向，0 : will go down; 1 : will go up .
 
 /**按钮类说明：按钮经消抖后分为0，1，2，3，4 共5个状态，分别对应：
@@ -181,6 +184,64 @@ public:
 
 class EnergySaver {
 
+public:
+    unsigned long passes ; //休眠时间，以wdt唤醒次数计。
+    unsigned short stat , toSleep ; //
+    EnergySaver( ) {
+        setTime(3) ;
+        passes = 0 ;
+        stat = 0 ;
+        toSleep = 0 ;
+    }
+    void setTime ( int mode ) {
+
+        byte bb;
+
+        if (mode > 9 )
+            mode=9;
+        bb=mode & 7;
+        if (mode > 7)
+            bb|= (1<<5);
+        bb|= (1<<WDCE);
+
+        MCUSR &= ~(1<<WDRF);
+        // start timed sequence
+        WDTCSR |= (1<<WDCE) | (1<<WDE);
+        // set new watchdog timeout value
+        WDTCSR = bb;
+        WDTCSR |= _BV(WDIE);
+    }//mode: 0=16ms, 1=32ms,2=64ms,3=128ms,4=250ms,5=500ms, 6=1 sec,7=2 sec, 8=4 sec, 9= 8sec ;every [mode] will call ISR(WDT_vect) once .
+
+    void update( int FanIsRunning ) {
+        if ( FanIsRunning ) {
+            passes = 0 ;
+        }
+        else {
+            passes ++ ;
+        }
+
+        if ( passes < 960 ) {
+            stat = 0 ;
+        }//风扇运行中：不休眠
+        else if ( passes < 4800 ) {
+            stat = 1 ;
+        }//风扇已停运2分钟：进行8/s的唤醒
+        else if ( passes < 16800 ) {
+            stat = 2 ;
+        }//风扇已停运10分钟：进行4/s的唤醒
+        else {
+            stat = 3 ;
+        }//风扇已停运60分钟：进行1/s的唤醒
+    }
+    void reset () { passes = 0 ; }
+
+    int getStat () { return stat ; }
+
+    void powerdown_avr(){
+      set_sleep_mode(SLEEP_MODE_PWR_DOWN  ); // sleep mode is set here
+      sleep_enable();
+      sleep_mode();                        // System sleeps here
+    }
 };
 
 class Int1ms {
@@ -213,6 +274,7 @@ Button button1(A3) ;
 Int1ms timer0 ;
 Fan fan1(11 , A1 , 112 , 15000 ) ;
 Flasher L13 (13) ;
+EnergySaver sleeper1 ;
 
 /*主程序*/
 
@@ -228,14 +290,16 @@ void everyms () {
     }                                       //长按
 
     else if (button1.getStat() == 2 ) {
-        if ( fan1.getStat() == 1 )
+        if ( fan1.getStat() == 1 ){
             fan1.shutdown();        //关机
-        else
+        }
+        else{
             fan1.startup ();        //开机
+        }
     }                                       //单击
 
     else {
-            L13.write ( 0 ) ;
+        L13.write ( 0 ) ;
     }                                       //没按键
     fan1.update() ;
 
@@ -247,10 +311,45 @@ SIGNAL ( TIMER0_COMPA_vect ) {
     timer0 . end   ( ) ;
 }//this signal is called every 1.024 ms , all control logics are written here .
 
+ISR(WDT_vect){
+
+    //Serial.print(sleeper1.stat);
+    //Serial.print(" WDT ");
+    //Serial.println(sleeper1.passes);
+
+    digitalWrite ( 13,HIGH ) ;
+    if (digitalRead (A3) == HIGH ) {
+        sleeper1.reset();
+    }
+    else {
+        sleeper1.update(fan1.getStat());
+        if ( sleeper1.getStat() == 0 ) {
+            if(fan1.getStat() == 1)
+                sleeper1.setTime(6);
+            else
+                sleeper1.setTime(3);
+        }//风扇运行中
+        else if ( sleeper1.getStat() == 1 ) {
+            sleeper1.setTime(3);//  8/s
+            sleeper1.toSleep = 1 ;
+        }//风扇停转2分钟
+        else if ( sleeper1.getStat() == 2 ) {
+            sleeper1.setTime(4);//  4/s
+            sleeper1.toSleep = 1 ;
+        }//风扇停转10分钟
+        else if ( sleeper1.getStat() == 3 ) {
+            sleeper1.setTime(6);//  1/s
+            sleeper1.toSleep = 1 ;
+        }//风扇停转60分钟
+    }
+    digitalWrite (13,LOW);
+
+}
+
 void setup() {
 
     /*配置1ms中断事件*/
-    Serial.begin ( 115200 ) ;
+    //Serial.begin ( 115200 ) ;
     OCR0A = 0xAF;
     TIMSK0 |= _BV(OCIE0A);
 
@@ -266,11 +365,15 @@ void setup() {
     pinMode (11,OUTPUT) ;
     OCR2A = 0 ;
 
+    /*节能*/
+    ACSR |=_BV(ACD);//OFF ACD
+    ADCSRA=0;//OFF ADC
 }
 
 void loop() {
-    delay(64) ;
-    //Serial.println ( timer0.getDuration () ) ;
-    Serial.println ( OCR2A ) ;
+    if ( sleeper1.toSleep == 1 ) {
+        sleeper1.powerdown_avr() ;
+    }
+    sleeper1.toSleep = 0 ;
 }
 
