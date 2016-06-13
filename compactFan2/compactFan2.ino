@@ -363,6 +363,7 @@ void setup() {
     pinMode (9,OUTPUT) ;
     pinMode (10,OUTPUT) ;
     pinMode (11,OUTPUT) ;
+    pinMode (A1,OUTPUT) ;
     OCR2A = 0 ;
 
     /*节能*/
