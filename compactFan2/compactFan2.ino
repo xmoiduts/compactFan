@@ -1,5 +1,5 @@
 //to do :
-//看门狗节能
+//解决休眠时间只有50%，跑一个时间间隔才能再次sleep的问题
 
 /*引脚说明：*/
 /*
@@ -112,7 +112,7 @@ public :
     short up ( ) {
 
         if ( isUp == 0 ) { return 0 ; }
-        realduty += k * interval ;
+        realduty += 2 * k * interval ;
         if ( realduty >= 255 ) {         //不设为256，风扇最大值会限制在奇怪的254.
             realduty = 255 ;
             OCR2A = realduty ;
@@ -220,13 +220,13 @@ public:
             passes ++ ;
         }
 
-        if ( passes < 960 ) {
+        if ( passes < 96 ) {
             stat = 0 ;
         }//风扇运行中：不休眠
-        else if ( passes < 4800 ) {
+        else if ( passes < 180 ) {
             stat = 1 ;
         }//风扇已停运2分钟：进行8/s的唤醒
-        else if ( passes < 16800 ) {
+        else if ( passes < 220 ) {
             stat = 2 ;
         }//风扇已停运10分钟：进行4/s的唤醒
         else {
@@ -320,6 +320,8 @@ ISR(WDT_vect){
     digitalWrite ( 13,HIGH ) ;
     if (digitalRead (A3) == HIGH ) {
         sleeper1.reset();
+		sleeper1.toSleep = 0 ;
+		sleeper1.setTime(3);
     }
     else {
         sleeper1.update(fan1.getStat());
@@ -342,6 +344,7 @@ ISR(WDT_vect){
             sleeper1.toSleep = 1 ;
         }//风扇停转60分钟
     }
+    delayMicroseconds(10);
     digitalWrite (13,LOW);
 
 }
@@ -369,12 +372,16 @@ void setup() {
     /*节能*/
     ACSR |=_BV(ACD);//OFF ACD
     ADCSRA=0;//OFF ADC
+
+    //Serial.begin(115200);
 }
 
 void loop() {
-    if ( sleeper1.toSleep == 1 ) {
+    while ( sleeper1.toSleep == 1 ) {
+        //Serial.println("Go to sleep");
+        //delay(5);
         sleeper1.powerdown_avr() ;
+        //Serial.println("wakeup");
     }
-    sleeper1.toSleep = 0 ;
 }
 
